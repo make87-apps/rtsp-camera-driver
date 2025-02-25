@@ -2,5 +2,34 @@ build_kit:
   name: python3
   version: latest
 outbound_topics:
-  - name: HELLO_WORLD_MESSAGE
-    message_type: make87_messages.text.text_plain.PlainText
+  - name: VIDEO_DATA
+    message_type: make87_messages.video.any.FrameAny
+config:
+  values:
+    - name: CAMERA_IP
+      description: "IP address of the camera"
+      required: true
+    - name: CAMERA_PORT
+      description: "Port of the camera"
+      required: false
+      default: "554"
+    - name: CAMERA_URI_SUFFIX
+      description: "URI suffix for the camera stream"
+      required: false
+      default: ""
+    - name: CAMERA_USERNAME
+      description: "Username used for camera login"
+      required: true
+      secret: false
+    - name: CAMERA_PASSWORD
+      description: "Password used for camera login"
+      required: true
+      secret: true
+    - name: VIDEO_CODEC
+      description: "Codec used for the video stream"
+      required: false
+      default: "h264"
+    - name: STREAM_INDEX
+      description: "Index of the stream to use. Will raise an error if the index is out of range."
+      default: "0"
+
