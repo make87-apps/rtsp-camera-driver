@@ -113,12 +113,16 @@ def main():
     last_height: int = 0
     last_is_keyframe: bool = False
 
+    start_pts = video_stream.start_time
+
     for packet in container.demux(video_stream):
         if packet.dts is None:
             continue
 
         # Use pts if available; otherwise fall back to dts
         packet_time = packet.pts if packet.pts is not None else packet.dts
+        packet_time = packet_time - start_pts
+
         frame_pts = packet_time * video_stream.time_base
         absolute_timestamp = stream_start + timedelta(seconds=float(frame_pts))
 
