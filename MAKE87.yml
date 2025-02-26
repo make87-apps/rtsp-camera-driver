@@ -25,10 +25,6 @@ config:
       description: "Password used for camera login"
       required: true
       secret: true
-    - name: VIDEO_CODEC
-      description: "Codec used for the video stream"
-      required: false
-      default: "h264"
     - name: STREAM_INDEX
       description: "Index of the stream to use. Will raise an error if the index is out of range."
       default: "0"

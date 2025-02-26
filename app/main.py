@@ -1,159 +1,97 @@
-from make87_messages.core.header_pb2 import Header
-import make87
-
-from make87_messages.video.any_pb2 import FrameAny
-import av
-from datetime import datetime, timedelta
 import logging
 
+from make87_messages.core.header_pb2 import Header
+import make87
+import av
+from datetime import datetime, timedelta
+
+from make87_messages.video.any_pb2 import FrameAny
 from make87_messages.video.frame_av1_pb2 import FrameAV1
 from make87_messages.video.frame_h264_pb2 import FrameH264
 from make87_messages.video.frame_h265_pb2 import FrameH265
 
-FFMPEG_CODEC_MAPPING = {
-    "h264": "h264",
-    "h265": "hevc",
-    "av1": "libaom-av1",
-}
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
-def encode_h264_frame(header: Header, data: bytes, width: int, height: int, is_keyframe: bool) -> FrameAny:
-    sub_message = FrameH264(header=header, data=data, width=width, height=height, is_keyframe=is_keyframe)
-    message = FrameAny(
-        header=header,
-        h264=sub_message,
-    )
-    return message
+# Generic function for encoding frames
+def encode_frame(codec, header, data, width, height, is_keyframe) -> FrameAny:
+    codec_classes = {
+        "h264": FrameH264,
+        "hevc": FrameH265,
+        "av1": FrameAV1,
+    }
 
+    if codec not in codec_classes:
+        raise ValueError(f"Unsupported codec: {codec}")
 
-def encode_h265_frame(header: Header, data: bytes, width: int, height: int, is_keyframe: bool) -> FrameAny:
-    sub_message = FrameH265(header=header, data=data, width=width, height=height, is_keyframe=is_keyframe)
-    message = FrameAny(
-        header=header,
-        h265=sub_message,
-    )
-    return message
+    sub_message = codec_classes[codec](header=header, data=data, width=width, height=height, is_keyframe=is_keyframe)
 
-
-def encode_av1_frame(header: Header, data: bytes, width: int, height: int, is_keyframe: bool) -> FrameAny:
-    sub_message = FrameAV1(header=header, data=data, width=width, height=height, is_keyframe=is_keyframe)
-    message = FrameAny(
-        header=header,
-        av1=sub_message,
-    )
-    return message
-
-
-ENCODING_FUNC_MAPPING = {
-    "h264": encode_h264_frame,
-    "h265": encode_h265_frame,
-    "av1": encode_av1_frame,
-}
+    return FrameAny(header=header, **{codec: sub_message})
 
 
 def main():
     make87.initialize()
     topic = make87.get_publisher(name="VIDEO_DATA", message_type=FrameAny)
 
-    username = make87.get_config_value("CAMERA_USERNAME")
-    password = make87.get_config_value("CAMERA_PASSWORD")
-    ip = make87.get_config_value(
-        "CAMERA_IP",
-    )
-    port = make87.get_config_value("CAMERA_PORT", default=554, decode=int)
-    suffix = make87.get_config_value("CAMERA_URI_SUFFIX", default="")
-
-    codec = make87.get_config_value("VIDEO_CODEC", default="h264")
-
-    stream_index = make87.get_config_value("STREAM_INDEX", default=0, decode=int)
-
-    if codec not in FFMPEG_CODEC_MAPPING:
-        raise ValueError(
-            f"Unsupported video codec: {codec}. Supported codecs are: {', '.join(FFMPEG_CODEC_MAPPING.keys())}"
-        )
-
-    stream_uri = f"rtsp://{username}:{password}@{ip}:{port}/{suffix}"
-
-    container = av.open(stream_uri)
-    stream_start = datetime.now()  # Unix timestamp in seconds
-
-    try:
-        video_stream = next((s for s in container.streams if s.index == stream_index))
-    except StopIteration:
-        raise Exception(f"Configured stream index {stream_index} does not exist. Exiting.")
-
-    # Basic stream information
-    stream_info = {
-        "Index": video_stream.index,
-        "Type": video_stream.type,
-        "Codec": video_stream.codec_context.name,
-        "Profile": video_stream.profile,
-        "Time Base": str(video_stream.time_base),
-        "Start Time": video_stream.start_time,
-        "Duration": video_stream.duration,
-        "Frames": video_stream.frames,
-        "Width": video_stream.codec_context.width,
-        "Height": video_stream.codec_context.height,
-        "Pixel Format": video_stream.codec_context.pix_fmt,
-        "Average Frame Rate": str(video_stream.average_rate),
+    # Read Camera Configuration
+    config = {
+        "username": make87.get_config_value("CAMERA_USERNAME"),
+        "password": make87.get_config_value("CAMERA_PASSWORD"),
+        "ip": make87.get_config_value("CAMERA_IP"),
+        "port": make87.get_config_value("CAMERA_PORT", default=554, decode=int),
+        "suffix": make87.get_config_value("CAMERA_URI_SUFFIX", default=""),
+        "stream_index": make87.get_config_value("STREAM_INDEX", default=0, decode=int),
     }
 
-    logging.info("Stream Attributes:")
-    for key, value in stream_info.items():
-        logging.info(f"  {key}: {value}")
+    stream_uri = f"rtsp://{config['username']}:{config['password']}@{config['ip']}:{config['port']}/{config['suffix']}"
+    with av.open(stream_uri) as container:
+        stream_start = datetime.now()  # Reference timestamp
 
-    codec_name = video_stream.codec_context.name
-    if codec_name != FFMPEG_CODEC_MAPPING[codec]:
-        raise ValueError(f"Configured codec {codec} does not match stream codec {codec_name}. Exiting.")
+        # Find the requested video stream
+        video_stream = next(iter(s for s in container.streams if s.index == config["stream_index"]), None)
+        if video_stream is None:
+            raise ValueError(f"Stream index {config['stream_index']} not found.")
 
-    frame_buffer = bytearray()
-    current_packet_time = None
-    last_absolute_timestamp: datetime | None = None
-    last_width: int = 0
-    last_height: int = 0
-    last_is_keyframe: bool = False
+        # Print stream information
+        stream_info = {
+            "Index": video_stream.index,
+            "Codec": video_stream.codec_context.name,
+            "Resolution": f"{video_stream.width}x{video_stream.height}",
+            "Pixel Format": video_stream.pix_fmt,
+            "Frame Rate": str(video_stream.average_rate),
+        }
+        logger.info("Stream Attributes:", stream_info)
 
-    start_pts = video_stream.start_time
+        # Validate codec support
+        codec_name = video_stream.codec_context.name
+        if codec_name not in {"h264", "hevc", "av1"}:
+            raise ValueError(f"Unsupported codec: {codec_name}")
 
-    for packet in container.demux(video_stream):
-        if packet.dts is None:
-            continue
+        # Stream metadata
+        start_pts = video_stream.start_time or 0  # Handle missing start_time
+        time_base = float(video_stream.time_base)
+        width, height = video_stream.width, video_stream.height
 
-        # Use pts if available; otherwise fall back to dts
-        packet_time = packet.pts if packet.pts is not None else packet.dts
-        packet_time = packet_time - start_pts
+        keyframe_found = False
 
-        frame_pts = packet_time * video_stream.time_base
-        absolute_timestamp = stream_start + timedelta(seconds=float(frame_pts))
+        for packet in container.demux(video_stream):
+            if packet.dts is None or (not keyframe_found and not packet.is_keyframe):
+                continue  # Skip until the first keyframe appears
 
-        # If we haven't started a frame yet, initialize our marker
-        if current_packet_time is None:
-            current_packet_time = packet_time
+            keyframe_found = True
 
-        # If the packet timestamp changes, then the previous frame is complete.
-        if packet_time is not None and packet_time != current_packet_time:
-            header = Header(entity_path=f"/camera/{ip}/{suffix}")
-            header.timestamp.FromDatetime(last_absolute_timestamp)
-            encode_func = ENCODING_FUNC_MAPPING[codec]
-            message = encode_func(
-                header=header,
-                data=bytes(frame_buffer),
-                width=last_width,
-                height=last_height,
-                is_keyframe=last_is_keyframe,
-            )
-            topic.publish(message)
-            frame_buffer = bytearray()
-            current_packet_time = packet_time
+            # Compute timestamps
+            packet_pts = packet.pts or packet.dts
+            relative_timestamp = (packet_pts - start_pts) * time_base
+            absolute_timestamp = stream_start + timedelta(seconds=relative_timestamp)
 
-        # Store values for the next frame before processing
-        last_absolute_timestamp = absolute_timestamp
-        last_width = packet.stream.width
-        last_height = packet.stream.height
-        last_is_keyframe = packet.is_keyframe
+            header = Header(entity_path=f"/camera/{config['ip']}/{config['suffix']}")
+            header.timestamp.FromDatetime(absolute_timestamp)
 
-        # Extend the current frame buffer with the packet's raw bytes
-        frame_buffer.extend(bytes(packet))
+            # Encode and publish the frame
+            topic.publish(encode_frame(codec_name, header, bytes(packet), width, height, packet.is_keyframe))
 
 
 if __name__ == "__main__":
