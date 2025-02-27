@@ -18,17 +18,18 @@ logger = logging.getLogger(__name__)
 # Generic function for encoding frames
 def encode_frame(codec, header, data, width, height, is_keyframe) -> FrameAny:
     codec_classes = {
-        "h264": FrameH264,
-        "hevc": FrameH265,
-        "av1": FrameAV1,
+        "h264": ("h264", FrameH264),
+        "hevc": ("h265", FrameH265),
+        "av1": ("av1", FrameAV1),
     }
 
     if codec not in codec_classes:
         raise ValueError(f"Unsupported codec: {codec}")
 
+    codec_field, codec_class = codec_classes[codec]
     sub_message = codec_classes[codec](header=header, data=data, width=width, height=height, is_keyframe=is_keyframe)
 
-    return FrameAny(header=header, **{codec: sub_message})
+    return FrameAny(header=header, **{codec_field: sub_message})
 
 
 def main():
