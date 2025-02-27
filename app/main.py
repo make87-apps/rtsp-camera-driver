@@ -27,7 +27,7 @@ def encode_frame(codec, header, data, width, height, is_keyframe) -> FrameAny:
         raise ValueError(f"Unsupported codec: {codec}")
 
     codec_field, codec_class = codec_classes[codec]
-    sub_message = codec_classes[codec](header=header, data=data, width=width, height=height, is_keyframe=is_keyframe)
+    sub_message = codec_class(header=header, data=data, width=width, height=height, is_keyframe=is_keyframe)
 
     return FrameAny(header=header, **{codec_field: sub_message})
 
