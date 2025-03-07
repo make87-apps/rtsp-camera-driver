@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 # Generic function for encoding frames
-def encode_frame(codec, header, data, width, height, is_keyframe) -> FrameAny:
+def encode_frame(codec, header, packet: av.Packet, width: int, height: int) -> FrameAny:
     codec_classes = {
         "h264": ("h264", FrameH264),
         "hevc": ("h265", FrameH265),
@@ -27,9 +27,33 @@ def encode_frame(codec, header, data, width, height, is_keyframe) -> FrameAny:
         raise ValueError(f"Unsupported codec: {codec}")
 
     codec_field, codec_class = codec_classes[codec]
-    sub_message = codec_class(header=header, data=data, width=width, height=height, is_keyframe=is_keyframe)
+    sub_message = codec_class(
+        header=header,
+        data=bytes(packet),
+        width=width,
+        height=height,
+        is_keyframe=packet.is_keyframe,
+        pts=packet.pts,
+        dts=packet.dts,
+        duration=packet.duration,
+        time_base=codec_class.Fraction(
+            num=packet.time_base.numerator,
+            den=packet.time_base.denominator,
+        ),
+    )
 
     return FrameAny(header=header, **{codec_field: sub_message})
+
+
+def check_annex_b_format(packet: av.Packet):
+    """
+    Check if the packet is in Annex B format.
+    This is typically used for H.264 streams.
+    """
+    # Check if the packet starts with the Annex B start code
+    data = bytes(packet)  # get the raw packet bytes
+    if not (data.startswith(b"\x00\x00\x00\x01") or data.startswith(b"\x00\x00\x01")):
+        raise NotImplementedError("Only Annex B format is supported for H.264/H.265 streams.")
 
 
 def main():
@@ -75,24 +99,27 @@ def main():
         time_base = float(video_stream.time_base)
         width, height = video_stream.width, video_stream.height
 
-        keyframe_found = False
+        validated_annex_b = False
 
         for packet in container.demux(video_stream):
-            if packet.dts is None or (not keyframe_found and not packet.is_keyframe):
-                continue  # Skip until the first keyframe appears
+            if packet.dts is None:
+                continue  # Skip invalid frames
 
-            keyframe_found = True
+            if not validated_annex_b:
+                if codec_name in {"h264", "hevc"}:
+                    # Check for Annex B format
+                    check_annex_b_format(packet)
+                validated_annex_b = True
 
             # Compute timestamps
-            packet_pts = packet.pts or packet.dts
-            relative_timestamp = (packet_pts - start_pts) * time_base
+            relative_timestamp = (packet.pts - start_pts) * time_base
             absolute_timestamp = stream_start + timedelta(seconds=relative_timestamp)
 
             header = Header(entity_path=f"/camera/{config['ip']}/{config['suffix']}")
             header.timestamp.FromDatetime(absolute_timestamp)
 
             # Encode and publish the frame
-            topic.publish(encode_frame(codec_name, header, bytes(packet), width, height, packet.is_keyframe))
+            topic.publish(encode_frame(codec_name, header, packet, width, height))
 
 
 if __name__ == "__main__":
